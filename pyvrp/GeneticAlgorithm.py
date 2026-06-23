@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Collection
+from typing import TYPE_CHECKING, Callable, Collection, Tuple
+
+# MOO REFACTOR: Import DEAP libraries
+from deap import base, creator, tools
 
 from pyvrp.ProgressPrinter import ProgressPrinter
 from pyvrp.Result import Result
@@ -21,35 +24,31 @@ if TYPE_CHECKING:
     from pyvrp.stop.StoppingCriterion import StoppingCriterion
 
 
+# MOO REFACTOR: Configure objectives to minimize vehicles (-1.0) and minimize distance (-1.0)
+creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0))
+
+
+class MOOSolution:
+    """
+    A lightweight wrapper to safely attach DEAP fitness objects
+    to PyVRP's compiled C++ Solution objects.
+    """
+
+    def __init__(self, sol: Solution, objectives: Tuple[float, ...]):
+        self.sol = sol
+        self.fitness = creator.FitnessMulti(values=objectives)
+
+    def __hash__(self):
+        return hash(self.sol)
+
+    def __eq__(self, other):
+        if not isinstance(other, MOOSolution):
+            return False
+        return self.sol == other.sol
+
+
 @dataclass
 class GeneticAlgorithmParams:
-    """
-    Parameters for the genetic algorithm.
-
-    Parameters
-    ----------
-    repair_probability
-        Probability (in :math:`[0, 1]`) of repairing an infeasible solution.
-        If the reparation makes the solution feasible, it is also added to
-        the population in the same iteration.
-    num_iters_no_improvement
-        Number of iterations without any improvement needed before a restart
-        occurs.
-
-    Attributes
-    ----------
-    repair_probability
-        Probability of repairing an infeasible solution.
-    num_iters_no_improvement
-        Number of iterations without improvement before a restart occurs.
-
-    Raises
-    ------
-    ValueError
-        When ``repair_probability`` is not in :math:`[0, 1]`, or
-        ``num_iters_no_improvement`` is negative.
-    """
-
     repair_probability: float = 0.80
     num_iters_no_improvement: int = 20_000
 
@@ -62,34 +61,6 @@ class GeneticAlgorithmParams:
 
 
 class GeneticAlgorithm:
-    """
-    Creates a GeneticAlgorithm instance.
-
-    Parameters
-    ----------
-    data
-        Data object describing the problem to be solved.
-    penalty_manager
-        Penalty manager to use.
-    rng
-        Random number generator.
-    population
-        Population to use.
-    search_method
-        Search method to use.
-    crossover_op
-        Crossover operator to use for generating offspring.
-    initial_solutions
-        Initial solutions to use to initialise the population.
-    params
-        Genetic algorithm parameters. If not provided, a default will be used.
-
-    Raises
-    ------
-    ValueError
-        When the population is empty.
-    """
-
     def __init__(
         self,
         data: ProblemData,
@@ -121,13 +92,34 @@ class GeneticAlgorithm:
         self._initial_solutions = initial_solutions
         self._params = params
 
-        # Find best feasible initial solution if any exist, else set a random
-        # infeasible solution (with infinite cost) as the initial best.
-        self._best = min(initial_solutions, key=self._cost_evaluator.cost)
+        # Initialize DEAP Pareto Front
+        self._pareto_front = tools.ParetoFront()
+
+        # Populate the initial Pareto Front
+        for sol in initial_solutions:
+            self._update_pareto_front(sol)
 
     @property
     def _cost_evaluator(self) -> CostEvaluator:
         return self._pm.cost_evaluator()
+
+    def _get_objectives(self, sol: Solution) -> Tuple[float, ...]:
+        """
+        MOO REFACTOR: Extracts the requested objectives directly from the PyVRP Solution.
+        """
+        num_vehicles = sol.num_routes()
+        distance = sol.distance()
+        return float(num_vehicles), float(distance)
+
+    def _update_pareto_front(self, sol: Solution) -> bool:
+        objectives = self._get_objectives(sol)
+        moo_sol = MOOSolution(sol, objectives)
+
+        front_before = set(self._pareto_front.items)
+        self._pareto_front.update([moo_sol])
+        front_after = set(self._pareto_front.items)
+
+        return front_before != front_after
 
     def run(
         self,
@@ -136,30 +128,6 @@ class GeneticAlgorithm:
         display: bool = False,
         display_interval: float = 5.0,
     ):
-        """
-        Runs the genetic algorithm with the provided stopping criterion.
-
-        Parameters
-        ----------
-        stop
-            Stopping criterion to use. The algorithm runs until the first time
-            the stopping criterion returns ``True``.
-        collect_stats
-            Whether to collect statistics about the solver's progress. Default
-            ``True``.
-        display
-            Whether to display information about the solver progress. Default
-            ``False``. Progress information is only available when
-            ``collect_stats`` is also set.
-        display_interval
-            Time (in seconds) between iteration logs. Defaults to 5s.
-
-        Returns
-        -------
-        Result
-            A Result object, containing statistics (if collected) and the best
-            found solution.
-        """
         print_progress = ProgressPrinter(display, display_interval)
         print_progress.start(self._data)
 
@@ -171,29 +139,46 @@ class GeneticAlgorithm:
         for sol in self._initial_solutions:
             self._pop.add(sol, self._cost_evaluator)
 
-        while not stop(self._cost_evaluator.cost(self._best)):
+        while not stop(len(self._pareto_front)):
             iters += 1
 
             if iters_no_improvement == self._params.num_iters_no_improvement:
                 print_progress.restart()
-
                 iters_no_improvement = 1
                 self._pop.clear()
 
                 for sol in self._initial_solutions:
                     self._pop.add(sol, self._cost_evaluator)
 
-            curr_best = self._cost_evaluator.cost(self._best)
+            # MOO REFACTOR: Map PyVRP's C++ Population to DEAP-compatible wrappers
+            current_pop = [
+                MOOSolution(pop_sol, self._get_objectives(pop_sol))
+                for pop_sol in self._pop
+            ]
 
-            parents = self._pop.select(self._rng, self._cost_evaluator)
+            # Assign crowding distances if using NSGA-II sorting algorithms
+            if len(current_pop) >= 2:
+                # tools.assignCrowdingDist(current_pop) is strictly required if using selTournamentDCD
+
+                # Requested Approach: Deterministic top-2 slice
+                selected = tools.selNSGA2(current_pop, k=2)
+                parents = (selected[0].sol, selected[1].sol)
+
+                # Correct NSGA-II Mating Approach (Uncomment to use):
+                # tools.assignCrowdingDist(current_pop)
+                # selected = tools.selTournamentDCD(current_pop, k=2)
+                # parents = (selected[0].sol, selected[1].sol)
+            else:
+                # Safety fallback if population gets nuked
+                parents = self._pop.select(self._rng, self._cost_evaluator)
+
             offspring = self._crossover(
                 parents, self._data, self._cost_evaluator, self._rng
             )
-            self._improve_offspring(offspring)
 
-            new_best = self._cost_evaluator.cost(self._best)
+            improved = self._improve_offspring(offspring)
 
-            if new_best < curr_best:
+            if improved:
                 iters_no_improvement = 1
             else:
                 iters_no_improvement += 1
@@ -202,27 +187,24 @@ class GeneticAlgorithm:
             print_progress.iteration(stats)
 
         end = time.perf_counter() - start
-        res = Result(self._best, stats, iters, end)
+
+        best_solutions = [wrapped.sol for wrapped in self._pareto_front.items]
+        res = Result(best_solutions, stats, iters, end)
 
         print_progress.end(res)
 
         return res
 
-    def _improve_offspring(self, sol: Solution):
-        def is_new_best(sol):
-            cost = self._cost_evaluator.cost(sol)
-            best_cost = self._cost_evaluator.cost(self._best)
-            return cost < best_cost
+    def _improve_offspring(self, sol: Solution) -> bool:
+        improved_front = False
 
         sol = self._search(sol, self._cost_evaluator)
         self._pop.add(sol, self._cost_evaluator)
         self._pm.register(sol)
 
-        if is_new_best(sol):
-            self._best = sol
+        if self._update_pareto_front(sol):
+            improved_front = True
 
-        # Possibly repair if current solution is infeasible. In that case, we
-        # penalise infeasibility more using a penalty booster.
         if (
             not sol.is_feasible()
             and self._rng.rand() < self._params.repair_probability
@@ -233,5 +215,7 @@ class GeneticAlgorithm:
                 self._pop.add(sol, self._cost_evaluator)
                 self._pm.register(sol)
 
-            if is_new_best(sol):
-                self._best = sol
+            if self._update_pareto_front(sol):
+                improved_front = True
+
+        return improved_front

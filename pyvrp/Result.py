@@ -1,89 +1,113 @@
-import math
-from dataclasses import dataclass
+from typing import List, Tuple
 
 from pyvrp.Statistics import Statistics
-from pyvrp._pyvrp import CostEvaluator, Solution
+from pyvrp._pyvrp import Solution
 
 
-@dataclass
 class Result:
     """
-    Stores the outcomes of a single run. An instance of this class is returned
-    once the GeneticAlgorithm completes.
+    Stores the outcomes of a multi-objective routing optimization run.
 
     Parameters
     ----------
     best
-        The best observed solution.
+        The Pareto front containing the best non-dominated solutions found.
     stats
-        A Statistics object containing runtime statistics.
+        Statistics collected during the algorithm's execution.
     num_iterations
-        Number of iterations performed by the genetic algorithm.
+        Total number of iterations performed.
     runtime
-        Total runtime of the main genetic algorithm loop.
-
-    Raises
-    ------
-    ValueError
-        When the number of iterations or runtime are negative.
+        Total runtime of the algorithm in seconds.
     """
 
-    best: Solution
-    stats: Statistics
-    num_iterations: int
-    runtime: float
+    def __init__(
+        self,
+        best: List[Solution],
+        stats: Statistics,
+        num_iterations: int,
+        runtime: float,
+    ):
+        self._best = best
+        self._stats = stats
+        self._num_iterations = num_iterations
+        self._runtime = runtime
 
-    def __post_init__(self):
-        if self.num_iterations < 0:
-            raise ValueError("Negative number of iterations not understood.")
-
-        if self.runtime < 0:
-            raise ValueError("Negative runtime not understood.")
-
-    def cost(self) -> float:
+    def cost(self) -> List[Tuple[int, float]]:
         """
-        Returns the cost (objective) value of the best solution. Returns inf
-        if the best solution is infeasible.
+        MOO REFACTOR: Single-objective cost is no longer mathematically valid.
+        This now returns the objective values (Number of Vehicles, Distance)
+        for all non-dominated solutions in the Pareto front.
         """
-        if not self.best.is_feasible():
-            return math.inf
-
-        num_load_dims = len(self.best.excess_load())
-        return CostEvaluator([0] * num_load_dims, 0, 0).cost(self.best)
+        return [(sol.num_routes(), sol.distance()) for sol in self._best]
 
     def is_feasible(self) -> bool:
         """
-        Returns whether the best solution is feasible.
+        Returns whether all solutions in the current Pareto front are feasible.
         """
-        return self.best.is_feasible()
+        return all(sol.is_feasible() for sol in self._best)
+
+    def has_statistics(self) -> bool:
+        """
+        Returns whether detailed statistics were collected during the algorithm's
+        execution.
+        """
+        return self._stats is not None and self._stats.num_iterations > 0
+
+    @property
+    def best(self) -> List[Solution]:
+        """
+        MOO REFACTOR: Returns the set of non-dominated solutions (Pareto front)
+        found by the algorithm, rather than a single solution.
+        """
+        return self._best
+
+    @property
+    def stats(self) -> Statistics:
+        """
+        Returns the runtime statistics object.
+        """
+        return self._stats
+
+    @property
+    def num_iterations(self) -> int:
+        """
+        Returns the number of iterations performed.
+        """
+        return self._num_iterations
+
+    @property
+    def runtime(self) -> float:
+        """
+        Returns the algorithm's runtime in seconds.
+        """
+        return self._runtime
 
     def summary(self) -> str:
         """
-        Returns a nicely formatted result summary.
+        MOO REFACTOR: Redesigned summary to print a table of the Pareto Front
+        trade-offs instead of a single vehicle/distance metric.
         """
-        obj_str = f"{self.cost()}" if self.is_feasible() else "INFEASIBLE"
-        summary = [
-            "Solution results",
-            "================",
-            f"    # routes: {self.best.num_routes()}",
-            f"     # trips: {self.best.num_trips()}",
-            f"   # clients: {self.best.num_clients()}",
-            f"   objective: {obj_str}",
-            f"    distance: {self.best.distance()}",
-            f"    duration: {self.best.duration()}",
-            f"# iterations: {self.num_iterations}",
-            f"    run-time: {self.runtime:.2f} seconds",
+        lines = [
+            "Multi-Objective Result Summary",
+            "==============================",
+            f"Pareto front size : {len(self._best)}",
+            f"All feasible      : {self.is_feasible()}",
+            f"Iterations        : {self._num_iterations}",
+            f"Runtime           : {self._runtime:.3f}s",
+            "",
+            "Pareto Front Details:",
+            "---------------------------------",
+            "Sol # | Vehicles | Distance",
+            "---------------------------------",
         ]
 
-        return "\n".join(summary)
+        for idx, sol in enumerate(self._best, start=1):
+            # Using sol.distance() and sol.num_routes() directly from C++ wrapper
+            lines.append(
+                f"{idx:<5} | {sol.num_routes():<8} | {sol.distance():.2f}"
+            )
+
+        return "\n".join(lines)
 
     def __str__(self) -> str:
-        content = [
-            self.summary(),
-            "",
-            "Routes",
-            "------",
-            str(self.best),
-        ]
-
-        return "\n".join(content)
+        return self.summary()
