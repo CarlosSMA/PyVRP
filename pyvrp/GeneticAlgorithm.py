@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Collection, Tuple
@@ -36,7 +37,9 @@ class MOOSolution:
 
     def __init__(self, sol: Solution, objectives: Tuple[float, ...]):
         self.sol = sol
-        self.fitness = creator.FitnessMulti(values=objectives)
+        # Use getattr to bypass IDE false-positive warnings about dynamic DEAP classes
+        FitnessClass = getattr(creator, "FitnessMulti")
+        self.fitness = FitnessClass(values=objectives)
 
     def __hash__(self):
         return hash(self.sol)
@@ -112,6 +115,14 @@ class GeneticAlgorithm:
         return float(num_vehicles), float(distance)
 
     def _update_pareto_front(self, sol: Solution) -> bool:
+        """
+        Wraps the solution and feeds it to DEAP.
+        Returns True if the Pareto Front was changed.
+        """
+        # FIX: Reject physically impossible solutions from the Pareto front!
+        if not sol.is_feasible():
+            return False
+
         objectives = self._get_objectives(sol)
         moo_sol = MOOSolution(sol, objectives)
 
@@ -157,17 +168,40 @@ class GeneticAlgorithm:
             ]
 
             # Assign crowding distances if using NSGA-II sorting algorithms
-            if len(current_pop) >= 2:
-                # tools.assignCrowdingDist(current_pop) is strictly required if using selTournamentDCD
+            if len(current_pop) >= 4:
+                # 1. Use selNSGA2 to sort the population AND safely assign crowding distance.
+                # Passing len(current_pop) forces it to evaluate and tag the whole population.
+                current_pop = tools.selNSGA2(current_pop, len(current_pop))
 
-                # Requested Approach: Deterministic top-2 slice
-                selected = tools.selNSGA2(current_pop, k=2)
-                parents = (selected[0].sol, selected[1].sol)
+                # 2. Custom Binary Tournament (Dominance + Crowding Distance)
+                # Bypasses DEAP's built-in selTournamentDCD which crashes if k is not a multiple of 4.
+                def tournament(ind1, ind2):
+                    if ind1.fitness.dominates(ind2.fitness):
+                        return ind1
+                    if ind2.fitness.dominates(ind1.fitness):
+                        return ind2
 
-                # Correct NSGA-II Mating Approach (Uncomment to use):
-                # tools.assignCrowdingDist(current_pop)
-                # selected = tools.selTournamentDCD(current_pop, k=2)
-                # parents = (selected[0].sol, selected[1].sol)
+                    # Tie-breaker: Prefer solutions in less crowded areas of the Pareto front
+                    c_dist1 = getattr(ind1.fitness, "crowding_dist", 0)
+                    c_dist2 = getattr(ind2.fitness, "crowding_dist", 0)
+
+                    if c_dist1 > c_dist2:
+                        return ind1
+                    if c_dist1 < c_dist2:
+                        return ind2
+
+                    # Final fallback: Random coin flip
+                    return ind1 if random.random() < 0.5 else ind2
+
+                # Pick 4 random individuals from the population
+                cand1, cand2 = random.sample(current_pop, 2)
+                cand3, cand4 = random.sample(current_pop, 2)
+
+                # Run the two tournaments to get our 2 parents
+                parent1 = tournament(cand1, cand2)
+                parent2 = tournament(cand3, cand4)
+
+                parents = (parent1.sol, parent2.sol)
             else:
                 # Safety fallback if population gets nuked
                 parents = self._pop.select(self._rng, self._cost_evaluator)
@@ -191,14 +225,20 @@ class GeneticAlgorithm:
         best_solutions = [wrapped.sol for wrapped in self._pareto_front.items]
         res = Result(best_solutions, stats, iters, end)
 
-        print_progress.end(res)
+        # MOO REFACTOR: Skipped because it crashes trying to read a multi-objective Result object
+        # print_progress.end(res)
 
         return res
 
     def _improve_offspring(self, sol: Solution) -> bool:
         improved_front = False
 
-        sol = self._search(sol, self._cost_evaluator)
+        # MOO REFACTOR: Throttling the Local Search (Partial Lamarckian Evolution)
+        # By only applying the aggressive distance-minimization 50% of the time,
+        # we prevent PyVRP from collapsing all genetic diversity into a single point.
+        if self._rng.rand() < 0.50:
+            sol = self._search(sol, self._cost_evaluator)
+
         self._pop.add(sol, self._cost_evaluator)
         self._pm.register(sol)
 

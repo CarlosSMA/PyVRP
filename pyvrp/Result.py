@@ -85,27 +85,40 @@ class Result:
     def summary(self) -> str:
         """
         MOO REFACTOR: Redesigned summary to print a table of the Pareto Front
-        trade-offs instead of a single vehicle/distance metric.
+        trade-offs, filtering out solutions that have identical objective scores.
         """
+        # Filter out objective-space duplicates
+        unique_objectives = {}
+        for sol in self._best:
+            vehicles = sol.num_routes()
+            distance = round(sol.distance(), 2)
+
+            # Use the tuple (vehicles, distance) as a key to ensure uniqueness
+            if (vehicles, distance) not in unique_objectives:
+                unique_objectives[(vehicles, distance)] = sol
+
         lines = [
             "Multi-Objective Result Summary",
             "==============================",
-            f"Pareto front size : {len(self._best)}",
+            f"Pareto front size : {len(self._best)} (Total)",
+            f"Unique trade-offs : {len(unique_objectives)}",
             f"All feasible      : {self.is_feasible()}",
             f"Iterations        : {self._num_iterations}",
             f"Runtime           : {self._runtime:.3f}s",
             "",
-            "Pareto Front Details:",
+            "Unique Pareto Front Details:",
             "---------------------------------",
             "Sol # | Vehicles | Distance",
             "---------------------------------",
         ]
 
-        for idx, sol in enumerate(self._best, start=1):
-            # Using sol.distance() and sol.num_routes() directly from C++ wrapper
-            lines.append(
-                f"{idx:<5} | {sol.num_routes():<8} | {sol.distance():.2f}"
-            )
+        # Sort by vehicles, then distance
+        sorted_unique = sorted(
+            unique_objectives.keys(), key=lambda x: (x[0], x[1])
+        )
+
+        for idx, (vehicles, distance) in enumerate(sorted_unique, start=1):
+            lines.append(f"{idx:<5} | {vehicles:<8} | {distance:.2f}")
 
         return "\n".join(lines)
 
