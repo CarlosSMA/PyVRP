@@ -54,14 +54,13 @@ algo = pyvrp.GeneticAlgorithm(
 
 # 5. Run the algorithm for 2500 generations
 print("Running Multi-Objective NSGA-II VRP...")
-stop_criterion = MaxIterations(2500)
+stop_criterion = MaxIterations(100)
 
 # display=True will trigger your custom ProgressPrinter and Result output
 result = algo.run(stop_criterion, display=True)
 
 # 6. Print your new Pareto Front summary table
 print("\nOptimization Complete!")
-print(result)
 
 import matplotlib.pyplot as plt
 
@@ -124,9 +123,8 @@ def plot_pareto_front(result):
     plt.legend()
     plt.tight_layout()
 
-    # 5. Render the chart
     plt.show()
 
 
-# --- Add this right at the very end of your main.py file ---
 plot_pareto_front(result)
+result.summary()
