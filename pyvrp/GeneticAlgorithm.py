@@ -217,34 +217,31 @@ class GeneticAlgorithm:
                 for pop_sol in self._pop
             ]
 
-            if len(current_pop) >= 4:
-                current_pop = tools.selNSGA2(current_pop, len(current_pop))
+            current_pop = tools.selNSGA2(current_pop, len(current_pop))
 
-                def tournament(ind1, ind2):
-                    if ind1.fitness.dominates(ind2.fitness):
-                        return ind1
-                    if ind2.fitness.dominates(ind1.fitness):
-                        return ind2
+            def tournament(ind1, ind2):
+                if ind1.fitness.dominates(ind2.fitness):
+                    return ind1
+                if ind2.fitness.dominates(ind1.fitness):
+                    return ind2
 
-                    c_dist1 = getattr(ind1.fitness, "crowding_dist", 0)
-                    c_dist2 = getattr(ind2.fitness, "crowding_dist", 0)
+                c_dist1 = getattr(ind1.fitness, "crowding_dist", 0)
+                c_dist2 = getattr(ind2.fitness, "crowding_dist", 0)
 
-                    if c_dist1 > c_dist2:
-                        return ind1
-                    if c_dist1 < c_dist2:
-                        return ind2
+                if c_dist1 > c_dist2:
+                    return ind1
+                if c_dist1 < c_dist2:
+                    return ind2
 
-                    return ind1 if random.random() < 0.5 else ind2
+                return ind1 if random.random() < 0.5 else ind2
 
-                cand1, cand2 = random.sample(current_pop, 2)
-                cand3, cand4 = random.sample(current_pop, 2)
+            cand1, cand2 = random.sample(current_pop, 2)
+            cand3, cand4 = random.sample(current_pop, 2)
 
-                parent1 = tournament(cand1, cand2)
-                parent2 = tournament(cand3, cand4)
+            parent1 = tournament(cand1, cand2)
+            parent2 = tournament(cand3, cand4)
 
-                parents = (parent1.solucao, parent2.solucao)
-            else:
-                parents = self._pop.select(self._rng, self._cost_evaluator)
+            parents = (parent1.solucao, parent2.solucao)
 
             offspring = self._crossover(
                 parents, self._data, self._cost_evaluator, self._rng
