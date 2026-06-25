@@ -54,7 +54,7 @@ algo = pyvrp.GeneticAlgorithm(
 
 # 5. Run the algorithm for 2500 generations
 print("Running Multi-Objective NSGA-II VRP...")
-stop_criterion = MaxIterations(100)
+stop_criterion = MaxIterations(200)
 
 # display=True will trigger your custom ProgressPrinter and Result output
 result = algo.run(stop_criterion, display=True)
