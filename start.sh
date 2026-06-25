@@ -1,8 +1,8 @@
-#!/usr/bin/env/bash
+#!/usr/bin/env bash
+
+set -e
 
 pip install -r ./requirements.txt
 pip install -e .
-
-cd ./execution
 
 python3 ./main.py

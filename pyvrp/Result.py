@@ -57,21 +57,3 @@ class Result:
         Returns the number of iterations performed.
         """
         return self._num_generations
-
-    def summary(self):
-        """
-        Returns a nicely formatted result summary.
-        """
-        unique_objectives = {}
-        for sol in self._best:
-            vehicles = sol.num_routes()
-            distance = round(sol.distance(), 2)
-
-            if (vehicles, distance) not in unique_objectives:
-                unique_objectives[(vehicles, distance)] = sol
-
-        print(f"""
-Possibilidades\t: {len(unique_objectives)}
-Gerações\t: {self._num_generations}
-Tempo\t\t: {self._runtime:.3f}s
-        """)

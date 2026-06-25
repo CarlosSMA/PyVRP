@@ -1,2 +1,2 @@
-deap==1.14.4
+deap==1.4.4
 matplotlib==3.11.0
