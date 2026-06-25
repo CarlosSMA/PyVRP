@@ -219,27 +219,9 @@ class GeneticAlgorithm:
 
             current_pop = tools.selNSGA2(current_pop, len(current_pop))
 
-            def tournament(ind1, ind2):
-                if ind1.fitness.dominates(ind2.fitness):
-                    return ind1
-                if ind2.fitness.dominates(ind1.fitness):
-                    return ind2
-
-                c_dist1 = getattr(ind1.fitness, "crowding_dist", 0)
-                c_dist2 = getattr(ind2.fitness, "crowding_dist", 0)
-
-                if c_dist1 > c_dist2:
-                    return ind1
-                if c_dist1 < c_dist2:
-                    return ind2
-
-                return ind1 if random.random() < 0.5 else ind2
-
-            cand1, cand2 = random.sample(current_pop, 2)
-            cand3, cand4 = random.sample(current_pop, 2)
-
-            parent1 = tournament(cand1, cand2)
-            parent2 = tournament(cand3, cand4)
+            parents = tools.selTournamentDCD(current_pop, 2)
+            parent1 = parents[0]
+            parent2 = parents[1]
 
             parents = (parent1.solucao, parent2.solucao)
 
